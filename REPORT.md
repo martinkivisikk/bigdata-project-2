@@ -6,55 +6,9 @@
 
 _Table DDL or DataFrame schema. Explain what is stored and why it is kept as-is._
 
-**Table schema (DDL)**
-
-```sql
-CREATE TABLE lakehouse.taxi.bronze_trips (
-    key STRING,
-    value STRING,
-    topic STRING,
-    partition INT,
-    offset BIGINT,
-    timestamp TIMESTAMP
-)
-USING iceberg
-```
-
-- key: Kafka message key
-- value: Raw JSON containing taxi trip data
-- topic: Kafka topic name
-- partition: Kafka partition ID
-- offset: Message offset within the partition
-- timestamp: Timestamp when the message was produced/ingested
-
-The bronze layer is the raw ingestion layer, where data is streamed directly from Kafka and stored without modification. Data is preserved in its original form: no transformations are applied as the parsing is done in the silver layer, offsets and checkpoints allow restarts without duplication.
-
 ### Silver
 
 _Table DDL or DataFrame schema. Explain what changed compared to bronze and why._
-
-**Table schema (DDL)**
-
-```sql
-CREATE TABLE IF NOT EXISTS lakehouse.taxi.silver_trips (
-    VendorID INT,
-    tpep_pickup_datetime TIMESTAMP,
-    tpep_dropoff_datetime TIMESTAMP,
-    passenger_count INT,
-    trip_distance DOUBLE,
-    PULocationID INT,
-    DOLocationID INT,
-    fare_amount DOUBLE,
-    total_amount DOUBLE,
-    pickup_borough STRING,
-    pickup_zone STRING,
-    pickup_service_zone STRING,
-    dropoff_borough STRING,
-    dropoff_zone STRING,
-    dropoff_service_zone STRING
-)
-USING ICEBERG
-```
 
 ---
 
@@ -89,12 +43,6 @@ USING ICEBERG
 ### Gold
 
 _Table DDL or DataFrame schema. Explain the aggregation logic._
-
-**Table schema (DDL)**
-
-```sql
-TODO
-```
 
 ## 2. Cleaning rules and enrichment
 
@@ -153,37 +101,13 @@ _Describe:_
 - _Output mode (append/update/complete) and why._
 - _Watermark (if used) and why._
 
-### Checkpointing
+- **Checkpoint path:** `/tmp/chk-silver` — stores Kafka offset progress and stream metadata. This allows the stream to resume from where it left off after a restart, preventing re-ingestion of already-processed messages.
 
-The checkpoint directory `/tmp/chk-bronze` is used by Spark Structured Streaming to store state and progress information about the streaming query.
+- **Trigger interval:** `processingTime="5 seconds"` — processes a new micro-batch every 5 seconds. This matches the bronze layer's interval, keeping both layers in sync without overwhelming the Iceberg catalog with too-frequent commits.
 
-The checkpoint contains Kafka offsets to track which messages have already been processed. It also stores commits, a record of which micro-batches have been committed to the sink for exactly-once semantics and metadata (unique query ID used to identify the query).
+- **Output mode:** Not explicitly set, as the stream uses `foreachBatch` with a `MERGE INTO`. The effective behavior is an upsert — new rows are inserted, already-existing matching rows are skipped. This prevents duplicates across batches even if the stream restarts.
 
-```python
-.option("checkpointLocation", "/tmp/chk-bronze")
-```
-
-### Trigger interval
-
-The data is processed every 5 seconds (micro-batches). An interval of 5 seconds allows near real time ingestion of messages and avoids overhead from very frequent triggers.
-
-```python
-.trigger(processingTime="5 seconds")
-```
-
-### Output mode
-
-The append mode ensures that only new rows are added to the result table. Each message represents a new event, the data is immutable and continuously arriving.
-
-```python
-.outputMode("append")
-```
-
-### Watermarking
-
-**PS! TODO**
-Currently not used, probably needed in the gold layer where trips are aggregated over time windows. 
-
+- **Watermark:** Not used. Since the silver layer reads from bronze snapshots per batch rather than performing stateful aggregations or windowed joins, there is no late-data problem to handle.
 
 ## 4. Gold table partitioning strategy
 
@@ -195,16 +119,6 @@ _Show the Iceberg snapshot history (query output or screenshot)._
 _Show that stopping and restarting the pipeline does not produce duplicates._
 _Include row counts before and after restart._
 
-**Bronze layer**
-
-The bronze writing stream is run twice and the before/after row counts are compared in the notebook.
-
-![bronze-restart-proof](images/bronze-restart-proof.png)
-
-**Silver layer**
-
-TODO
-
 ## 6. Custom scenario
 
 _Explain and/or show how you solved the custom scenario from the GitHub issue._
@@ -212,23 +126,13 @@ _Explain and/or show how you solved the custom scenario from the GitHub issue._
 ## 7. How to run
 
 ```bash
-# Configure credentials
-cp .env.example .env
-
-# Place data files in data/
-
-# Start the stack
+# Step 1: Start infrastructure
 docker compose up -d
 
-# Create the Kafka topic
-docker exec kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 \
-  --create --topic taxi-trips --partitions 3 --replication-factor 1"
+# Step 2: Start the producer
+python produce.py
 
-# Start the producer
-docker exec project2_jupyter python /home/jovyan/project/produce.py --loop
-
-# Run the pipeline
+# Step 3: Run the pipeline
 <your command here>
 ```
 
