@@ -202,7 +202,9 @@ The bronze writing stream is run twice and the before/after row counts are compa
 
 **Silver layer**
 
-TODO
+The silver writing stream is run twice and before/after row counts are compared in the notebook.
+
+![silver_restart-proof](images/silver-restart-proof.png)
 
 ## 6. Custom scenario
 
