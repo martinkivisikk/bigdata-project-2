@@ -75,7 +75,7 @@ USING ICEBERG
   - non-positive distance  
   - negative fare  
 - Replaced `passenger_count` NULL/≤0 → `1`  
-- Removed duplicates  
+- Restrict passenger count to range 1-9
 
 **4. Enrichment**
 - Joined with zone lookup table:
@@ -90,7 +90,7 @@ USING ICEBERG
 
 _Table DDL or DataFrame schema. Explain the aggregation logic._
 
-**Table schema (DDL)**
+**Table schema (DDL)**v
 
 ```sql
 TODO
@@ -125,8 +125,7 @@ _Describe the enrichment step (zone lookup join)._
   - *Justification:* Negative fares are not realistic
 
 - **Deduplication**
-  - Applied `dropDuplicates()` on all columns
-  - *Justification:* Prevents duplicate records from ingestion/streaming
+  - Bronze layer uses exactly-once semantics, checkpointing, kafka topic+partition+offset.
 
 ---
 
@@ -202,9 +201,9 @@ The bronze writing stream is run twice and the before/after row counts are compa
 
 **Silver layer**
 
-The silver writing stream is run twice and before/after row counts are compared in the notebook.
+The silver writing is run twice and before/after row counts are compared in the notebook.
 
-![silver_restart-proof](images/silver-restart-proof.png)
+![silver_restart-proof](images/silver-restart-proof-v2.png)
 
 ## 6. Custom scenario
 
@@ -222,8 +221,6 @@ cp .env.example .env
 # Start the stack
 docker compose up -d
 
-# Step 2: Start the producer
-python produce.py
 # Create the Kafka topic
 docker exec kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server localhost:9092 \
@@ -232,7 +229,6 @@ docker exec kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
 # Start the producer
 docker exec project2_jupyter python /home/jovyan/project/produce.py --loop
 
-# Step 3: Run the pipeline
 # Run the pipeline
 <your command here>
 ```
