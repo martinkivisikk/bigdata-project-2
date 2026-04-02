@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS lakehouse.taxi.silver_trips (
     dropoff_service_zone STRING
 )
 USING ICEBERG
+PARTITIONED BY (days(tpep_pickup_datetime))
 ```
 
 ---
