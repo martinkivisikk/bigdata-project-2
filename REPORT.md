@@ -94,8 +94,29 @@ _Table DDL or DataFrame schema. Explain the aggregation logic._
 **Table schema (DDL)**v
 
 ```sql
-TODO
+CREATE TABLE IF NOT EXISTS lakehouse.taxi.gold_route_stats (
+    pickup_borough    STRING,
+    dropoff_borough   STRING,
+    trip_count        BIGINT,
+    total_revenue     DOUBLE,
+    avg_distance      DOUBLE,
+    revenue_per_mile  DOUBLE
+)
+USING iceberg
+PARTITIONED BY (pickup_borough);
 ```
+
+#### Aggregation Logic
+
+The logic groups the Silver data by pickup_borough and dropoff_borough to calculate:
+
+- trip_count: Total number of trips per route.
+
+- total_revenue: Sum of total_amount.
+
+- avg_distance: Average trip_distance.
+
+- revenue_per_mile: Total revenue divided by total distance, serving as a profitability KPI for that specific corridor.
 
 ## 2. Cleaning rules and enrichment
 
@@ -180,14 +201,34 @@ The append mode ensures that only new rows are added to the result table. Each m
 ```
 
 ### Watermarking
-
-**PS! TODO**
-Currently not used, probably needed in the gold layer where trips are aggregated over time windows.
-
+Watermarking could ave been used in gold layer to make sure, which data is too late. But, it's only usable in case when gold layer
+was streaming. Since we ran into technical issue with iceberg table streaming (checkpoint files in listening , we created simple batch jobs for silver and gold layers.
 ## 4. Gold table partitioning strategy
 
 _Explain your partitioning choice. Why this column(s)? What query patterns does it optimize?_
 _Show the Iceberg snapshot history (query output or screenshot)._
+
+#### Partitioning Strategy
+The table is partitioned by pickup_borough.
+
+**Justification**
+
+Why this column?
+Low Cardinality: There are only a few boroughs in NYC (Manhattan, Brooklyn, Queens, etc.). This creates a small, manageable 
+number of partitions, which is ideal for Iceberg tables to avoid the "small files" problem.
+
+Natural Grouping: Since the Gold table is an aggregate of route statistics, 
+pickup_borough serves as the primary "entry point" for geographic analysis.
+
+Partition Pruning: Queries like SELECT * FROM gold_route_stats WHERE pickup_borough = 'Manhattan' 
+allow Spark to skip all data files related to other boroughs entirely, drastically reducing I/O.
+
+By partitioning this way, when you run overwritePartitions(), 
+Spark only replaces the data for the specific boroughs present in your current batch, 
+rather than rewriting the entire global table.
+
+**Iceberg Snapshot History**
+![iceberg-snapshot-history](images/snapshot-history.png)
 
 ## 5. Restart proof
 
@@ -202,9 +243,15 @@ The bronze writing stream is run twice and the before/after row counts are compa
 
 **Silver layer**
 
-The silver writing is run twice and before/after row counts are compared in the notebook.
+The silver writing is run twice and before/after row counts are compared in the notebook. 
 
 ![silver_restart-proof](images/silver-restart-proof-v2.png)
+
+**Gold layer**
+
+The gold writing is run twice and before/after row counts are compared in the notebook.
+
+![gold_restart-proof](images/gold-restart-proof.png)
 
 ## 6. Custom scenario
 
