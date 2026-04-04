@@ -201,8 +201,7 @@ The append mode ensures that only new rows are added to the result table. Each m
 ```
 
 ### Watermarking
-Watermarking could ave been used in gold layer to make sure, which data is too late. But, it's only usable in case when gold layer
-was streaming. Since we ran into technical issue with iceberg table streaming (checkpoint files in listening , we created simple batch jobs for silver and gold layers.
+Watermarking could have been used in gold layer to make sure, which data is too late. But, it's only usable in case when gold layer was implemented as a constanly streaming/micro-batching. Since we ran into a lot of technical issue with iceberg table streaming, we created simple batch jobs for silver and gold layers that always overwrite all data, therefore, watermarking is would not have been useful.
 ## 4. Gold table partitioning strategy
 
 _Explain your partitioning choice. Why this column(s)? What query patterns does it optimize?_
