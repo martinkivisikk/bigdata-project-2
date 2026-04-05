@@ -148,6 +148,7 @@ _Describe the enrichment step (zone lookup join)._
 
 - **Deduplication**
   - Bronze layer uses exactly-once semantics, checkpointing, kafka topic+partition+offset.
+  - Deduplication key: (VendorID, tpep_pickup_datetime, tpep_dropoff_datetime, PULocationID, DOLocationID). These fields can be used to identify a trip, but it would be better to generate a hash key of these columns.
 
 ---
 
