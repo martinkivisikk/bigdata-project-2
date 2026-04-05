@@ -142,12 +142,25 @@ _Describe the enrichment step (zone lookup join)._
   - Removed rows with `trip_distance ≤ 0`
   - *Justification:* Non-positive distances are invalid
 
-- **Fare validation**
+- **Fare and total validation**
   - Removed rows with `fare_amount < 0`
-  - *Justification:* Negative fares are not realistic
+  - Removed rows with `total_amount < 0`
+  - *Justification:* Negative fare/total values are invalid for downstream aggregation
 
 - **Deduplication**
-  - Bronze layer uses exactly-once semantics, checkpointing, kafka topic+partition+offset.
+  - Applied streaming deduplication in the silver layer using  
+    `withWatermark("tpep_pickup_datetime", "1 day")` and `dropDuplicates(...)`
+  - Duplicate key fields:
+    - `VendorID`
+    - `tpep_pickup_datetime`
+    - `tpep_dropoff_datetime`
+    - `PULocationID`
+    - `DOLocationID`
+    - `passenger_count`
+    - `trip_distance`
+    - `fare_amount`
+    - `total_amount`
+  - *Justification:* Removes repeated trip events while keeping streaming state bounded
 
 ---
 
@@ -168,20 +181,20 @@ _Describe the enrichment step (zone lookup join)._
 
 ## 3. Streaming configuration
 
-_Describe:_
-- _Checkpoint path and what it stores._
-- _Trigger interval and why you chose it._
-- _Output mode (append/update/complete) and why._
-- _Watermark (if used) and why._
-
 ### Checkpointing
 
-The checkpoint directory `/tmp/chk-bronze` is used by Spark Structured Streaming to store state and progress information about the streaming query.
+The pipeline uses separate checkpoint directories for the streaming queries:
 
-The checkpoint contains Kafka offsets to track which messages have already been processed. It also stores commits, a record of which micro-batches have been committed to the sink for exactly-once semantics and metadata (unique query ID used to identify the query).
+- bronze: `/home/jovyan/project/checkpoints/bronze`
+- silver: `/home/jovyan/project/checkpoints/silver`
+- metrics: `/home/jovyan/project/checkpoints/metrics`
+
+These checkpoints store Kafka/source offsets, committed batch information, and query metadata. This allows Spark to resume from the last committed state after restart instead of reprocessing already committed records.
 
 ```python
-.option("checkpointLocation", "/tmp/chk-bronze")
+.option("checkpointLocation", BRONZE_CHECKPOINT)
+.option("checkpointLocation", SILVER_CHECKPOINT)
+.option("checkpointLocation", METRICS_CHECKPOINT)
 ```
 
 ### Trigger interval
@@ -194,14 +207,24 @@ The data is processed every 5 seconds (micro-batches). An interval of 5 seconds 
 
 ### Output mode
 
-The append mode ensures that only new rows are added to the result table. Each message represents a new event, the data is immutable and continuously arriving.
+Bronze and silver use append mode because new valid events continuously arrive and are written incrementally to the sink.
 
 ```python
 .outputMode("append")
 ```
 
+The custom scenario metrics stream uses foreachBatch(...) and appends one metrics record per partition per micro-batch.
+
 ### Watermarking
-Watermarking could have been used in gold layer to make sure, which data is too late. But, it's only usable in case when gold layer was implemented as a constanly streaming/micro-batching. Since we ran into a lot of technical issue with iceberg table streaming, we created simple batch jobs for silver and gold layers that always overwrite all data, therefore, watermarking is would not have been useful.
+
+Watermarking is used in the silver layer:
+```python
+.withWatermark("tpep_pickup_datetime", "1 day")
+```
+This supports bounded-state streaming deduplication. It allows Spark to remove old deduplication state instead of keeping all historical keys forever.
+
+The gold layer is not maintained as a continuous streaming sink in the final implementation. Instead, it is recomputed from the persisted silver table when needed.
+
 ## 4. Gold table partitioning strategy
 
 _Explain your partitioning choice. Why this column(s)? What query patterns does it optimize?_
@@ -254,7 +277,46 @@ The gold writing is run twice and before/after row counts are compared in the no
 
 ## 6. Custom scenario
 
-_Explain and/or show how you solved the custom scenario from the GitHub issue._
+The custom scenario required logging per-micro-batch processing metrics to a separate Iceberg table.
+
+Implemented table:
+
+```sql
+CREATE TABLE IF NOT EXISTS lakehouse.taxi.metrics (
+    batch_id        BIGINT,
+    topic           STRING,
+    partition       INT,
+    starting_offset BIGINT,
+    ending_offset   BIGINT,
+    rows_processed  BIGINT,
+    batch_timestamp TIMESTAMP
+)
+USING iceberg
+```
+
+The metrics are written by a separate Structured Streaming query using foreachBatch(...).
+
+For each micro-batch and Kafka partition, the pipeline records:
+
+- batch_id
+- topic
+- partition
+- starting_offset
+- ending_offset
+- rows_processed
+- batch_timestamp
+
+The producer was run with:
+```bash
+docker exec project2_jupyter python /home/jovyan/project/produce.py --rate 100
+```
+The resulting metrics table showed:
+
+- regular 5-second micro-batches
+- advancing Kafka offset ranges per partition
+- processed row counts per batch
+
+This fulfilled the scenario requirement and ade backlog / lag analysis possible from the logged offsets.
 
 ## 7. How to run
 
@@ -274,8 +336,12 @@ docker exec kafka sh -c "/opt/kafka/bin/kafka-topics.sh \
   --create --topic taxi-trips --partitions 3 --replication-factor 1"
 
 # Start the producer
-docker exec project2_jupyter python /home/jovyan/project/produce.py --loop
+docker exec project2_jupyter python /home/jovyan/project/produce.py --rate 100
+```
 
 # Run the pipeline
-<your command here>
-```
+Open Jupyter and run the notebook:
+
+1) setup cells
+2) bronze/silver/gold/metrics definition cells
+3) verification cells
